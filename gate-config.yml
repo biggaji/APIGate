@@ -1,12 +1,70 @@
-
-# Your boilerplate YAML content goes here
 api_version: v1
-services:
-  rest_apis:
-    user_service:
-      base_url: http://127.0.0.1:3001
-      methods: ['GET', 'POST']
-  graphql_apis:
-    order_service:
-      - base_url: http://127.0.0.1:3002/graphql
-      - method: ['POST']
+
+# Global settings
+settings:
+  base_path: /api
+  port: 3000
+  log_level: debug
+
+# Routes configuration
+routes:
+  - path: /public
+    target: http://public-service:3003
+    methods: [GET]
+    authentication:
+      type: none
+    authorization:
+      roles: [public]
+
+  - path: /users
+    target: http://user-service:3001
+    methods: [GET, POST]
+    authentication:
+      type: jwt
+      audience: user-api
+    authorization:
+      roles: [user]
+
+  - path: /users/:id
+    target: http://user-service:3001
+    methods: [GET]
+    authentication:
+      type: jwt
+      audience: user-api
+    authorization:
+      roles: [admin]
+
+# Authentication configuration
+authentication:
+  jwt:
+    secret: your_jwt_secret_key
+
+# Authorization configuration
+authorization:
+  roles:
+    - name: public
+      permissions: [read]
+    - name: user
+      permissions: [read, write]
+    - name: admin
+      permissions: [read, write, admin]
+
+# Rate Limiting configuration
+rate_limiting:
+  global:
+    enabled: true
+    max_requests: 5000
+    interval: 1d
+
+# Logging configuration
+logging:
+  format: combined
+  file:
+    enabled: true
+    path: /path/to/logs/api-gateway.log
+
+# Caching configuration
+caching:
+  default_duration: 1m
+  max_size: 1000
+# Other components and configurations can be added as needed

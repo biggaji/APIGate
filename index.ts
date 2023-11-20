@@ -5,13 +5,30 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { fileURLToPath } from 'node:url';
+import NodeCache from 'node-cache';
+import rateLimit from 'express-rate-limit';
+import winston from 'winston';
+import compression from 'compression';
+import jwt, { JsonWebTokenError } from 'jsonwebtoken';
+
+const gatewayCache = new NodeCache();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const rootDir = process.cwd();
 
+const logger = winston.createLogger({
+  level: 'debug',
+  transports: [
+    new winston.transports.File({
+      filename: path.join(rootDir, 'api-gateway.log'),
+    }),
+  ],
+});
+
 const server = express();
+server.use(compression());
 const proxy = httpProxy.createProxyServer({ ssl: false });
 
 const readFile = promisify(fs.readFile);
@@ -45,13 +62,27 @@ try {
   }
 } catch (error) {
   console.log(error);
+  logger.error('Failed to fetch gate-config.yaml file');
   throw new Error('Fail to fetch gate-config file');
 }
 
-console.log(gateRouterObject);
+// console.log(gateRouterObject);
 
 server.use(express.urlencoded({ extended: false }));
 // server.use(express.json());
+
+server.use((request, response, next) => {
+  const start = Date.now();
+
+  next();
+
+  response.on('finish', () => {
+    const end = Date.now();
+
+    const latency = end - start;
+    console.log(`Latency: ${latency}secs`);
+  });
+});
 
 // Basic
 /**
@@ -72,46 +103,69 @@ server.use(express.urlencoded({ extended: false }));
  * 2. Integrating with Service discovery
  */
 
-// Advanced
+server.use(
+  '/api-gate',
+  (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const { path, method } = request;
 
-server.use((request: Request, response: Response, next: NextFunction) => {
-  try {
-    const { path, method } = request;
+      const cacheKey = `${path}`;
 
-    proxy.on('proxyReq', (proxyRequest, request, response, options) => {
-      // console.log(proxyRequest.getHeaders());
-      proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
-      // console.log(request.query, request.body);
-    });
+      const resultInCache = gatewayCache.get(cacheKey);
 
-    // Response event
-    proxy.on('proxyRes', (proxyRes) => {
+      if (resultInCache) {
+        response.status(200).json(resultInCache);
+        logger.info('cache hit');
+        console.log('cache hit');
+        return;
+      }
+
+      proxy.on('proxyReq', (proxyRequest, request, response, options) => {
+        // console.log(proxyRequest.getHeaders());
+        proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
+        // console.log(request.query, request.body);
+      });
+
       // Initialize data here
-      let data: any;
+      let data: any[] = [];
+      // Response event
+      proxy.on('proxyRes', (proxyRes) => {
+        response.setHeader('Content-Type', 'application/json');
 
-      // Capture response data
-      proxyRes.on('data', (chunk) => {
-        data += chunk;
+        // Capture response data
+        proxyRes.on('data', (chunk) => {
+          console.log('cache miss');
+          logger.info('cache miss');
+          data.push(chunk);
+        });
+
+        // Manipulate the response data
+        proxyRes.on('end', () => {
+          // Convert buffer to string
+          const rawData = Buffer.concat(data).toString('utf8');
+
+          // Parse as JSON
+          const jsonData = JSON.parse(rawData);
+
+          // Set cache
+          gatewayCache.set(cacheKey, jsonData);
+        });
       });
 
-      // Manipulate the response data
-      proxyRes.on('end', () => {
-        response.end(data);
+      proxy.web(request, response, {
+        target: 'http://localhost:3001/users',
       });
-    });
 
-    proxy.web(request, response, {
-      target: 'http://localhost:3001/users',
-    });
-
-    console.log(path, method);
-  } catch (error) {
-    next(error);
-  }
-});
+      console.log(path, method);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 // Handle proxy error
 proxy.on('error', (err, request, response: any) => {
+  logger.error('Error forwarding the request');
   response.status(500).json({ message: 'Error forwarding the request' });
 });
 
@@ -119,3 +173,68 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log('API Gateway server started on port:', PORT);
 });
+
+function isValidGateConfig(gateConfigFile: any) {}
+
+/**
+ * Validates a JSON Web Token (JWT).
+ * @param token - The JWT to be validated.
+ * @param secretKey - The secret key used for JWT verification.
+ * @returns {object} The payload if the token is valid.
+ * @throws {Error} If the token or secretKey is not provided, or if the token is invalid or expired.
+ */
+function validateJWT(token: string, secretKey: string) {
+  try {
+    if (!token) {
+      throw new Error("Can't validate an empty or undefined token");
+    }
+
+    if (!secretKey) {
+      throw new Error('Jwt secret not provided');
+    }
+
+    const payload = jwt.verify(token, secretKey);
+    return payload;
+  } catch (error) {
+    if (error instanceof JsonWebTokenError) {
+      throw new Error('Invalid or expired access token');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Handles Role-Based Access Control (RBAC) by checking if the user role is authorized.
+ * @param allowedRoleList - An array of allowed roles for accessing a resource.
+ * @param userRole - The role of the user attempting to access the resource.
+ * @throws {Error} Throws an error with a descriptive message if access is denied.
+ */
+function handleRBAC(allowedRoleList: string[], userRole: string) {
+  if (!allowedRoleList.includes(userRole)) {
+    throw new Error('Access denied: User role not authorized.');
+  }
+}
+
+/**
+ * Handles permission scope control for a resource by checking the user role.
+ * @param userRole - The role of the authenticated user.
+ * @param isWriteRequest - A boolean to indicate if the request is a write request or if it modifies data.
+ * @throws {Error} Throws an error with a descriptive message if the user doesn't have write permission.
+ */
+function handlePermissionScope(userRole: string, isWriteRequest: boolean) {
+  if (userRole === 'public' && isWriteRequest) {
+    throw new Error(
+      "Access denied: Public role doesn't allow write permission.",
+    );
+  }
+}
+
+/**
+ *
+ * @param path
+ * @param method
+ */
+function resolveEnpointFromRouteList(path: string, method: string) {
+  try {
+  } catch (error) {}
+}
