@@ -5,10 +5,23 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { fileURLToPath } from 'node:url';
+import NodeCache from 'node-cache';
+import winston from 'winston';
+import compression from 'compression';
+const gatewayCache = new NodeCache();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = process.cwd();
+const logger = winston.createLogger({
+    level: 'debug',
+    transports: [
+        new winston.transports.File({
+            filename: path.join(rootDir, 'api-gateway.log'),
+        }),
+    ],
+});
 const server = express();
+server.use(compression());
 const proxy = httpProxy.createProxyServer({ ssl: false });
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
@@ -40,11 +53,21 @@ try {
 }
 catch (error) {
     console.log(error);
+    logger.error('Failed to fetch gate-config.yaml file');
     throw new Error('Fail to fetch gate-config file');
 }
-console.log(gateRouterObject);
+// console.log(gateRouterObject);
 server.use(express.urlencoded({ extended: false }));
 // server.use(express.json());
+server.use((request, response, next) => {
+    const start = Date.now();
+    next();
+    response.on('finish', () => {
+        const end = Date.now();
+        const latency = end - start;
+        console.log(`Latency: ${latency}secs`);
+    });
+});
 // Basic
 /**
  * Recieves request, sends|maps request to appropriate microservice, returns the response back to the client
@@ -63,25 +86,41 @@ server.use(express.urlencoded({ extended: false }));
  * 2. Integrating with Service discovery
  */
 // Advanced
-server.use((request, response, next) => {
+server.use('/api-gate', (request, response, next) => {
     try {
         const { path, method } = request;
+        const cacheKey = `${path}`;
+        const resultInCache = gatewayCache.get(cacheKey);
+        if (resultInCache) {
+            response.status(200).json(resultInCache);
+            logger.info('cache hit');
+            console.log('cache hit');
+            return;
+        }
         proxy.on('proxyReq', (proxyRequest, request, response, options) => {
             // console.log(proxyRequest.getHeaders());
             proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
             // console.log(request.query, request.body);
         });
+        // Initialize data here
+        let data = [];
         // Response event
         proxy.on('proxyRes', (proxyRes) => {
-            // Initialize data here
-            let data;
+            response.setHeader('Content-Type', 'application/json');
             // Capture response data
             proxyRes.on('data', (chunk) => {
-                data += chunk;
+                console.log('cache miss');
+                logger.info('cache miss');
+                data.push(chunk);
             });
             // Manipulate the response data
             proxyRes.on('end', () => {
-                response.end(data);
+                // Convert buffer to string
+                const rawData = Buffer.concat(data).toString('utf8');
+                // Parse as JSON
+                const jsonData = JSON.parse(rawData);
+                // Set cache
+                gatewayCache.set(cacheKey, jsonData);
             });
         });
         proxy.web(request, response, {
@@ -95,9 +134,11 @@ server.use((request, response, next) => {
 });
 // Handle proxy error
 proxy.on('error', (err, request, response) => {
+    logger.error('Error forwarding the request');
     response.status(500).json({ message: 'Error forwarding the request' });
 });
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log('API Gateway server started on port:', PORT);
 });
+function isValidGateConfig(gateConfigFile) { }
