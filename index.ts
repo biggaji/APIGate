@@ -103,6 +103,12 @@ server.use((request, response, next) => {
  * 2. Integrating with Service discovery
  */
 
+/**
+ * Rate limiting
+ * 1. Global_level
+ * 2. Service level
+ * 3. Route_level
+ */
 server.use(
   '/api-gate',
   (request: Request, response: Response, next: NextFunction) => {
