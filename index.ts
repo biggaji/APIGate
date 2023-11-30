@@ -37,16 +37,16 @@ const writeFile = promisify(fs.writeFile);
 let gateRouterObject: any;
 const GATE_BIOLERPLATE = `
 # Your boilerplate YAML content goes here
+
 api_version: v1
-services:
-  rest_apis:
-    user_service:
-      base_url: http://127.0.0.1:3001
-      methods: ['GET', 'POST']
-  graphql_apis:
-    order_service:
-      - base_url: http://127.0.0.1:3002/graphql
-      - method: ['POST']
+
+# Global settings
+settings:
+  base_path: /api
+  port: 3000
+  log_level: debug
+
+# Routes configuration
 `;
 
 try {
