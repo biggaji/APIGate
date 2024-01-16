@@ -20,8 +20,8 @@ routes:
     target: http://user-service:3001
     methods: [GET, POST]
     authentication:
-      type: jwt
-      audience: user-api
+      type: none
+      # audience: user-api
     authorization:
       roles: [user]
 
