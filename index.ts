@@ -9,7 +9,8 @@ import NodeCache from 'node-cache';
 import rateLimit from 'express-rate-limit';
 import winston from 'winston';
 import compression from 'compression';
-import jwt, { JsonWebTokenError } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
+const { JsonWebTokenError } = jwt;
 
 const gatewayCache = new NodeCache();
 
@@ -35,6 +36,7 @@ const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 
 let gateRouterObject: any;
+
 const GATE_BIOLERPLATE = `
 # Your boilerplate YAML content goes here
 
@@ -103,65 +105,71 @@ server.use((request, response, next) => {
  * 2. Integrating with Service discovery
  */
 
-server.use(
-  '/api-gate',
-  (request: Request, response: Response, next: NextFunction) => {
-    try {
-      const { path, method } = request;
+server.use('/api-gate', (request: Request, response: Response, next: NextFunction) => {
+  try {
+    const { path, method } = request;
 
-      const cacheKey = `${path}`;
+    const headerPayload = {
+      role: 'user',
+    };
 
-      const resultInCache = gatewayCache.get(cacheKey);
+    const routeResolverResult = resolveEndpointFromRouteList(path, method, headerPayload);
 
-      if (resultInCache) {
-        response.status(200).json(resultInCache);
-        logger.info('cache hit');
-        console.log('cache hit');
-        return;
-      }
+    console.log(routeResolverResult.target);
 
-      proxy.on('proxyReq', (proxyRequest, request, response, options) => {
-        // console.log(proxyRequest.getHeaders());
-        proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
-        // console.log(request.query, request.body);
-      });
+    const cacheKey = `${path}`;
 
-      // Initialize data here
-      let data: any[] = [];
-      // Response event
-      proxy.on('proxyRes', (proxyRes) => {
-        response.setHeader('Content-Type', 'application/json');
+    const resultInCache = gatewayCache.get(cacheKey);
 
-        // Capture response data
-        proxyRes.on('data', (chunk) => {
-          console.log('cache miss');
-          logger.info('cache miss');
-          data.push(chunk);
-        });
-
-        // Manipulate the response data
-        proxyRes.on('end', () => {
-          // Convert buffer to string
-          const rawData = Buffer.concat(data).toString('utf8');
-
-          // Parse as JSON
-          const jsonData = JSON.parse(rawData);
-
-          // Set cache
-          gatewayCache.set(cacheKey, jsonData);
-        });
-      });
-
-      proxy.web(request, response, {
-        target: 'http://localhost:3001/users',
-      });
-
-      console.log(path, method);
-    } catch (error) {
-      next(error);
+    if (resultInCache) {
+      response.status(200).json(resultInCache);
+      logger.info('cache hit');
+      console.log('cache hit');
+      return;
     }
-  },
-);
+
+    proxy.on('proxyReq', (proxyRequest, request, response, options) => {
+      // console.log(proxyRequest.getHeaders());
+      proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
+      // console.log(request.query, request.body);
+    });
+
+    // Initialize data here
+    let data: any[] = [];
+    // TODO: Replace data datatype from array to string
+    // Response event
+    proxy.on('proxyRes', (proxyRes) => {
+      response.setHeader('Content-Type', 'application/json');
+
+      // Capture response data
+      proxyRes.on('data', (chunk) => {
+        console.log('cache miss');
+        logger.info('cache miss');
+        data.push(chunk);
+      });
+
+      // Manipulate the response data
+      proxyRes.on('end', () => {
+        // Convert buffer to string
+        const rawData = Buffer.concat(data).toString('utf8');
+
+        // Parse as JSON
+        const jsonData = JSON.parse(rawData);
+
+        // Set cache
+        gatewayCache.set(cacheKey, jsonData);
+      });
+    });
+
+    proxy.web(request, response, {
+      target: 'http://localhost:3001/users',
+    });
+
+    console.log(path, method);
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Handle proxy error
 proxy.on('error', (err, request, response: any) => {
@@ -169,7 +177,7 @@ proxy.on('error', (err, request, response: any) => {
   response.status(500).json({ message: 'Error forwarding the request' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 server.listen(PORT, () => {
   console.log('API Gateway server started on port:', PORT);
 });
@@ -211,21 +219,19 @@ function validateJWT(token: string, secretKey: string) {
  */
 function handleRBAC(allowedRoleList: string[], userRole: string) {
   if (!allowedRoleList.includes(userRole)) {
-    throw new Error('Access denied: User role not authorized.');
+    throw new Error(`Access denied: role '${userRole}' not authorized.`);
   }
 }
 
 /**
  * Handles permission scope control for a resource by checking the user role.
- * @param userRole - The role of the authenticated user.
- * @param isWriteRequest - A boolean to indicate if the request is a write request or if it modifies data.
+ * @param allowedPermissions - The role of the authenticated user.
+ * @param userPermissionScope - A boolean to indicate if the request is a write request or if it modifies data.
  * @throws {Error} Throws an error with a descriptive message if the user doesn't have write permission.
  */
-function handlePermissionScope(userRole: string, isWriteRequest: boolean) {
-  if (userRole === 'public' && isWriteRequest) {
-    throw new Error(
-      "Access denied: Public role doesn't allow write permission.",
-    );
+function handlePermissionScope(allowedPermissions: string[], userPermissionScope: string) {
+  if (!allowedPermissions.includes(userPermissionScope)) {
+    throw new Error("Access denied: Request doesn't include neccessary permissions.");
   }
 }
 
@@ -234,7 +240,59 @@ function handlePermissionScope(userRole: string, isWriteRequest: boolean) {
  * @param path
  * @param method
  */
-function resolveEnpointFromRouteList(path: string, method: string) {
+function resolveEndpointFromRouteList(path: string, method: string, authHeader?: any) {
+  // It should take the whole request
   try {
-  } catch (error) {}
+    console.log(path, method);
+    let jwtPayload = {};
+    const definedRouteList: any[] = gateRouterObject.routes;
+
+    // Check path match
+    const pathMatchRoute = definedRouteList.find((route) => {
+      return route.path === path;
+    });
+
+    if (!pathMatchRoute) {
+      throw new Error(`Cannot ${method} ${path}`);
+    }
+
+    // Check if method is allowed if path match
+    const isAllowedMethod = pathMatchRoute.methods.includes(method);
+
+    if (!isAllowedMethod) {
+      throw new Error('Method not allowed');
+    }
+
+    console.log('Method allowed?:', isAllowedMethod);
+
+    // Check if authentication is required
+    const requiresAuth = pathMatchRoute.authentication.type !== 'none';
+    console.log(requiresAuth);
+
+    if (requiresAuth) {
+      // Check if user passes auth requirements
+      // For now it's jwt
+      if (!authHeader.jwt) {
+        throw new Error('jwt is missing');
+      }
+      jwtPayload = validateJWT(authHeader.jwt, 'secret');
+    }
+
+    // Check authorization scope
+    const authScope = pathMatchRoute.authorization;
+
+    if (authScope && authScope.roles) {
+      handleRBAC(authScope.roles, authHeader.role);
+    }
+
+    if (authScope && authScope.permissions) {
+      handlePermissionScope(authScope.permissions, authHeader.permission);
+    }
+
+    // Return redirect url if all is successful, else throw error or return null
+    return { target: pathMatchRoute.target, jwtPayload };
+  } catch (error: any) {
+    console.log('Error resolving endpoint from route list in gateway:', error.message);
+    throw error;
+  }
 }
