@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Express, Request, Response, NextFunction, request } from 'express';
 import httpProxy from 'http-proxy';
 import fs from 'node:fs';
 import { promisify } from 'node:util';
@@ -10,9 +10,13 @@ import rateLimit from 'express-rate-limit';
 import winston from 'winston';
 import compression from 'compression';
 import jwt from 'jsonwebtoken';
+import morgan from 'morgan';
 const { JsonWebTokenError } = jwt;
 
-const gatewayCache = new NodeCache();
+const gatewayCache = new NodeCache({
+  stdTTL: 240,
+  checkperiod: 120,
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,12 +34,15 @@ const logger = winston.createLogger({
 
 const server = express();
 server.use(compression());
+
 const proxy = httpProxy.createProxyServer({ ssl: false });
+
+bootstrapGateway(server, true);
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 
-let gateRouterObject: any;
+let gatewayConfigurationObject: any;
 
 const GATE_BIOLERPLATE = `
 # Your boilerplate YAML content goes here
@@ -46,7 +53,6 @@ api_version: v1
 settings:
   base_path: /api
   port: 3000
-  log_level: debug
 
 # Routes configuration
 `;
@@ -57,10 +63,10 @@ try {
   if (!fs.existsSync(GATE_CONFIG_FILE_PATH)) {
     // create a new one
     await writeFile('gate-config.yml', GATE_BIOLERPLATE, { encoding: 'utf-8' });
-    gateRouterObject = await yaml.load(GATE_BIOLERPLATE);
+    gatewayConfigurationObject = await yaml.load(GATE_BIOLERPLATE);
   } else {
     const gateConfig = await readFile(GATE_CONFIG_FILE_PATH, 'utf-8');
-    gateRouterObject = await yaml.load(gateConfig);
+    gatewayConfigurationObject = await yaml.load(gateConfig);
   }
 } catch (error) {
   console.log(error);
@@ -68,21 +74,21 @@ try {
   throw new Error('Fail to fetch gate-config file');
 }
 
-// console.log(gateRouterObject);
+// console.log(gatewayConfigurationObject);
 
-server.use(express.urlencoded({ extended: false }));
-// server.use(express.json());
+// Global gateway configuration object
+const gatewayGlobalConfig = resolveGlobalGatewayConfig();
+
+server.use(express.urlencoded({ extended: true }));
 
 server.use((request, response, next) => {
   const start = Date.now();
-
   next();
 
   response.on('finish', () => {
     const end = Date.now();
-
     const latency = end - start;
-    console.log(`Latency: ${latency}secs`);
+    console.log(`Request took ${latency}secs`);
   });
 });
 
@@ -105,20 +111,16 @@ server.use((request, response, next) => {
  * 2. Integrating with Service discovery
  */
 
-server.use('/api-gate', (request: Request, response: Response, next: NextFunction) => {
+server.use(gatewayGlobalConfig.API_PATH, (request: Request, response: Response, next: NextFunction) => {
   try {
     const { path, method } = request;
 
     const headerPayload = {
-      role: 'user',
+      role: 'public',
     };
 
     const routeResolverResult = resolveEndpointFromRouteList(path, method, headerPayload);
-
-    console.log(routeResolverResult.target);
-
     const cacheKey = `${path}`;
-
     const resultInCache = gatewayCache.get(cacheKey);
 
     if (resultInCache) {
@@ -129,9 +131,7 @@ server.use('/api-gate', (request: Request, response: Response, next: NextFunctio
     }
 
     proxy.on('proxyReq', (proxyRequest, request, response, options) => {
-      // console.log(proxyRequest.getHeaders());
-      proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
-      // console.log(request.query, request.body);
+      // proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
     });
 
     // Initialize data here
@@ -140,7 +140,7 @@ server.use('/api-gate', (request: Request, response: Response, next: NextFunctio
     // Response event
     proxy.on('proxyRes', (proxyRes) => {
       response.setHeader('Content-Type', 'application/json');
-
+      console.log('Response incoming');
       // Capture response data
       proxyRes.on('data', (chunk) => {
         console.log('cache miss');
@@ -152,7 +152,7 @@ server.use('/api-gate', (request: Request, response: Response, next: NextFunctio
       proxyRes.on('end', () => {
         // Convert buffer to string
         const rawData = Buffer.concat(data).toString('utf8');
-
+        console.log(rawData);
         // Parse as JSON
         const jsonData = JSON.parse(rawData);
 
@@ -160,24 +160,30 @@ server.use('/api-gate', (request: Request, response: Response, next: NextFunctio
         gatewayCache.set(cacheKey, jsonData);
       });
     });
+    console.log(routeResolverResult.target);
 
     proxy.web(request, response, {
-      target: 'http://localhost:3001/users',
+      target: routeResolverResult.target,
+      timeout: 60000, //60 seconds
     });
-
-    console.log(path, method);
   } catch (error) {
     next(error);
   }
 });
 
-// Handle proxy error
+// Proxy error handler
 proxy.on('error', (err, request, response: any) => {
-  logger.error('Error forwarding the request');
+  logger.error(`Error forwarding the request: ${err.message}`);
   response.status(500).json({ message: 'Error forwarding the request' });
 });
 
-const PORT = process.env.PORT || 8000;
+// Global error handling middleware
+server.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  logger.error(`An error occured: ${err.message}`);
+  res.status(500).json({ message: err.message });
+});
+
+const PORT = gatewayGlobalConfig.API_GATEWAY_PORT || process.env.PORT || 8000;
 server.listen(PORT, () => {
   console.log('API Gateway server started on port:', PORT);
 });
@@ -243,9 +249,9 @@ function handlePermissionScope(allowedPermissions: string[], userPermissionScope
 function resolveEndpointFromRouteList(path: string, method: string, authHeader?: any) {
   // It should take the whole request
   try {
-    console.log(path, method);
+    console.log(method, path);
     let jwtPayload = {};
-    const definedRouteList: any[] = gateRouterObject.routes;
+    const definedRouteList: any[] = gatewayConfigurationObject.routes;
 
     // Check path match
     const pathMatchRoute = definedRouteList.find((route) => {
@@ -260,14 +266,14 @@ function resolveEndpointFromRouteList(path: string, method: string, authHeader?:
     const isAllowedMethod = pathMatchRoute.methods.includes(method);
 
     if (!isAllowedMethod) {
-      throw new Error('Method not allowed');
+      throw new Error(`Method '${method}' not allowed`);
     }
 
     console.log('Method allowed?:', isAllowedMethod);
 
     // Check if authentication is required
     const requiresAuth = pathMatchRoute.authentication.type !== 'none';
-    console.log(requiresAuth);
+    console.log('Requires authentication?:', requiresAuth);
 
     if (requiresAuth) {
       // Check if user passes auth requirements
@@ -293,6 +299,78 @@ function resolveEndpointFromRouteList(path: string, method: string, authHeader?:
     return { target: pathMatchRoute.target, jwtPayload };
   } catch (error: any) {
     console.log('Error resolving endpoint from route list in gateway:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Bootstraps the necessary middlewares based on the config object
+ * @param server
+ * @param log
+ * @returns
+ */
+function bootstrapGateway(server: Express, log: boolean = false) {
+  // server.use((request: Request, response: Response, next: NextFunction) => {
+  // });
+  console.log('Server is bootstraped');
+  if (!log) {
+    return;
+  }
+
+  server.use(morgan('dev'));
+}
+
+function resolveGlobalGatewayConfig() {
+  /**
+   * To properly configure this gateway, i need to pass the server instance
+   * and add and setup necessary middlewares as required, e.g like a bootstrap
+   * TODO:
+   * Validate required global config params
+   * Construct gateway URL prefix : /api/v1/
+   * Set port
+   * set log_level, configure winston
+   * Set up jwt handling
+   * Check user role if provided and configure necessary permissions
+   * Configure rate limiting
+   * Configure logging
+   * Setup caching
+   *
+   */
+
+  try {
+    const gatewayConfigObject = gatewayConfigurationObject;
+
+    // API version is required
+    // console.log(gatewayConfigObject);
+    if (!gatewayConfigObject.api_version) {
+      throw new Error(`'api_version' is required in the gateway configuration file`);
+    }
+
+    const API_VERSION = gatewayConfigObject.api_version;
+
+    // Settings is required
+    if (!gatewayConfigObject.settings) {
+      throw new Error(`'settings' is required in the gateway configuration file`);
+    }
+
+    const globalSettings = gatewayConfigObject.settings;
+
+    // If settings, check if necessary fields are required
+
+    if (!globalSettings.base_path || !globalSettings.port) {
+      throw new Error('all configs params under settings are required');
+    }
+
+    // Construct API base path
+    const API_PATH = `${globalSettings.base_path}/${API_VERSION}`;
+    const API_GATEWAY_PORT = parseInt(globalSettings.port);
+
+    return {
+      API_PATH,
+      API_GATEWAY_PORT,
+    };
+  } catch (error: any) {
+    console.error(`Error resolving gateway global configuration: ${error.message}`);
     throw error;
   }
 }

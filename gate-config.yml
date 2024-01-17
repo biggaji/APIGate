@@ -1,38 +1,9 @@
-api_version: v1
+api_version: v1 #required
 
 # Global settings
-settings:
+settings: #required
   base_path: /api
   port: 3000
-  log_level: debug
-
-# Routes configuration
-routes:
-  - path: /public
-    target: http://public-service:3003
-    methods: [GET]
-    authentication:
-      type: none
-    authorization:
-      roles: [public]
-
-  - path: /users
-    target: http://user-service:3001
-    methods: [GET, POST]
-    authentication:
-      type: none
-      # audience: user-api
-    authorization:
-      roles: [user]
-
-  - path: /users/:id
-    target: http://user-service:3001
-    methods: [GET]
-    authentication:
-      type: jwt
-      audience: user-api
-    authorization:
-      roles: [admin]
 
 # Authentication configuration
 authentication:
@@ -51,20 +22,57 @@ authorization:
 
 # Rate Limiting configuration
 rate_limiting:
-  global:
-    enabled: true
-    max_requests: 5000
-    interval: 1d
+  enabled: true
+  max_requests: 5000
+  interval: 1d
 
 # Logging configuration
 logging:
   format: combined
+  log_level: debug
   file:
     enabled: true
-    path: /path/to/logs/api-gateway.log
+    path: /logs/api-gateway.log
 
 # Caching configuration
 caching:
-  default_duration: 1m
+  default_ttl: 1000
   max_size: 1000
-# Other components and configurations can be added as needed
+
+# Routes configuration
+routes:
+  - path: /public
+    target: http://localhost:3003
+    methods: [GET]
+    authentication:
+      type: none
+    authorization:
+      roles: [public]
+
+  - path: /users
+    target: http://localhost:3001
+    methods: [GET, POST]
+    authentication:
+      type: none
+      # audience: user-api
+    authorization:
+      roles: [user]
+
+  - path: /
+    target: http://localhost:3001
+    methods: [GET]
+    authentication:
+      type: none
+      # audience: user-api
+    authorization:
+      roles: [user]
+
+  - path: /users/:id
+    target: http://user-service:3001
+    methods: [GET]
+    authentication:
+      type: jwt
+      audience: user-api
+    authorization:
+      roles: [admin]
+    # add more configurations as needed
