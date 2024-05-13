@@ -1,82 +1,31 @@
-import express, { Express, Request, Response, NextFunction, request } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import httpProxy from 'http-proxy';
-import fs from 'node:fs';
-import { promisify } from 'node:util';
-import path from 'node:path';
-import yaml from 'js-yaml';
-import { fileURLToPath } from 'node:url';
 import NodeCache from 'node-cache';
 import rateLimit from 'express-rate-limit';
-import winston from 'winston';
 import compression from 'compression';
-import jwt from 'jsonwebtoken';
-import morgan from 'morgan';
-const { JsonWebTokenError } = jwt;
+import { logger } from './utils/logger';
+import { resolveEndpointFromRouteList } from './helpers/resolveEndpointsFromRouteList';
+import { bootstrapGateway } from './helpers/bootstrapGateway';
+import { resolveGlobalGatewayConfig } from './helpers/resolveGlobalGatewayConfig';
 
 const gatewayCache = new NodeCache({
   stdTTL: 240,
   checkperiod: 120,
 });
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const rootDir = process.cwd();
-
-const logger = winston.createLogger({
-  level: 'debug',
-  transports: [
-    new winston.transports.File({
-      filename: path.join(rootDir, 'api-gateway.log'),
-    }),
-  ],
-});
-
 const server = express();
-server.use(compression());
+
+// gzip compression - 2
+server.use(
+  compression({
+    strategy: 2,
+  }),
+);
 
 const proxy = httpProxy.createProxyServer({ ssl: false });
 
 bootstrapGateway(server, true);
 
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-
-let gatewayConfigurationObject: any;
-
-const GATE_BIOLERPLATE = `
-# Your boilerplate YAML content goes here
-
-api_version: v1
-
-# Global settings
-settings:
-  base_path: /api
-  port: 3000
-
-# Routes configuration
-`;
-
-try {
-  const GATE_CONFIG_FILE_PATH = path.resolve(rootDir, 'gate-config.yml');
-
-  if (!fs.existsSync(GATE_CONFIG_FILE_PATH)) {
-    // create a new one
-    await writeFile('gate-config.yml', GATE_BIOLERPLATE, { encoding: 'utf-8' });
-    gatewayConfigurationObject = await yaml.load(GATE_BIOLERPLATE);
-  } else {
-    const gateConfig = await readFile(GATE_CONFIG_FILE_PATH, 'utf-8');
-    gatewayConfigurationObject = await yaml.load(gateConfig);
-  }
-} catch (error) {
-  console.log(error);
-  logger.error('Failed to fetch gate-config.yaml file');
-  throw new Error('Fail to fetch gate-config file');
-}
-
-// console.log(gatewayConfigurationObject);
-
-// Global gateway configuration object
 const gatewayGlobalConfig = resolveGlobalGatewayConfig();
 
 server.use(express.urlencoded({ extended: true }));
@@ -119,6 +68,8 @@ server.use(gatewayGlobalConfig.API_PATH, (request: Request, response: Response, 
       role: 'public',
     };
 
+    // URL rewriting can be done here or before
+
     const routeResolverResult = resolveEndpointFromRouteList(path, method, headerPayload);
     const cacheKey = `${path}`;
     const resultInCache = gatewayCache.get(cacheKey);
@@ -130,6 +81,7 @@ server.use(gatewayGlobalConfig.API_PATH, (request: Request, response: Response, 
       return;
     }
 
+    // Perform request transformation if necessary
     proxy.on('proxyReq', (proxyRequest, request, response, options) => {
       // proxyRequest.setHeader('x-api-key', 'ejU67ehshJ&');
     });
@@ -138,6 +90,8 @@ server.use(gatewayGlobalConfig.API_PATH, (request: Request, response: Response, 
     let data: any[] = [];
     // TODO: Replace data datatype from array to string
     // Response event
+
+    // Response transformation here
     proxy.on('proxyRes', (proxyRes) => {
       response.setHeader('Content-Type', 'application/json');
       console.log('Response incoming');
@@ -187,190 +141,3 @@ const PORT = gatewayGlobalConfig.API_GATEWAY_PORT || process.env.PORT || 8000;
 server.listen(PORT, () => {
   console.log('API Gateway server started on port:', PORT);
 });
-
-function isValidGateConfig(gateConfigFile: any) {}
-
-/**
- * Validates a JSON Web Token (JWT).
- * @param token - The JWT to be validated.
- * @param secretKey - The secret key used for JWT verification.
- * @returns {object} The payload if the token is valid.
- * @throws {Error} If the token or secretKey is not provided, or if the token is invalid or expired.
- */
-function validateJWT(token: string, secretKey: string) {
-  try {
-    if (!token) {
-      throw new Error("Can't validate an empty or undefined token");
-    }
-
-    if (!secretKey) {
-      throw new Error('Jwt secret not provided');
-    }
-
-    const payload = jwt.verify(token, secretKey);
-    return payload;
-  } catch (error) {
-    if (error instanceof JsonWebTokenError) {
-      throw new Error('Invalid or expired access token');
-    }
-    throw error;
-  }
-}
-
-/**
- * Handles Role-Based Access Control (RBAC) by checking if the user role is authorized.
- * @param allowedRoleList - An array of allowed roles for accessing a resource.
- * @param userRole - The role of the user attempting to access the resource.
- * @throws {Error} Throws an error with a descriptive message if access is denied.
- */
-function handleRBAC(allowedRoleList: string[], userRole: string) {
-  if (!allowedRoleList.includes(userRole)) {
-    throw new Error(`Access denied: role '${userRole}' not authorized.`);
-  }
-}
-
-/**
- * Handles permission scope control for a resource by checking the user role.
- * @param allowedPermissions - The role of the authenticated user.
- * @param userPermissionScope - A boolean to indicate if the request is a write request or if it modifies data.
- * @throws {Error} Throws an error with a descriptive message if the user doesn't have write permission.
- */
-function handlePermissionScope(allowedPermissions: string[], userPermissionScope: string) {
-  if (!allowedPermissions.includes(userPermissionScope)) {
-    throw new Error("Access denied: Request doesn't include neccessary permissions.");
-  }
-}
-
-/**
- *
- * @param path
- * @param method
- */
-function resolveEndpointFromRouteList(path: string, method: string, authHeader?: any) {
-  // It should take the whole request
-  try {
-    console.log(method, path);
-    let jwtPayload = {};
-    const definedRouteList: any[] = gatewayConfigurationObject.routes;
-
-    // Check path match
-    const pathMatchRoute = definedRouteList.find((route) => {
-      return route.path === path;
-    });
-
-    if (!pathMatchRoute) {
-      throw new Error(`Cannot ${method} ${path}`);
-    }
-
-    // Check if method is allowed if path match
-    const isAllowedMethod = pathMatchRoute.methods.includes(method);
-
-    if (!isAllowedMethod) {
-      throw new Error(`Method '${method}' not allowed`);
-    }
-
-    console.log('Method allowed?:', isAllowedMethod);
-
-    // Check if authentication is required
-    const requiresAuth = pathMatchRoute.authentication.type !== 'none';
-    console.log('Requires authentication?:', requiresAuth);
-
-    if (requiresAuth) {
-      // Check if user passes auth requirements
-      // For now it's jwt
-      if (!authHeader.jwt) {
-        throw new Error('jwt is missing');
-      }
-      jwtPayload = validateJWT(authHeader.jwt, 'secret');
-    }
-
-    // Check authorization scope
-    const authScope = pathMatchRoute.authorization;
-
-    if (authScope && authScope.roles) {
-      handleRBAC(authScope.roles, authHeader.role);
-    }
-
-    if (authScope && authScope.permissions) {
-      handlePermissionScope(authScope.permissions, authHeader.permission);
-    }
-
-    // Return redirect url if all is successful, else throw error or return null
-    return { target: pathMatchRoute.target, jwtPayload };
-  } catch (error: any) {
-    console.log('Error resolving endpoint from route list in gateway:', error.message);
-    throw error;
-  }
-}
-
-/**
- * Bootstraps the necessary middlewares based on the config object
- * @param server
- * @param log
- * @returns
- */
-function bootstrapGateway(server: Express, log: boolean = false) {
-  // server.use((request: Request, response: Response, next: NextFunction) => {
-  // });
-  console.log('Server is bootstraped');
-  if (!log) {
-    return;
-  }
-
-  server.use(morgan('dev'));
-}
-
-function resolveGlobalGatewayConfig() {
-  /**
-   * To properly configure this gateway, i need to pass the server instance
-   * and add and setup necessary middlewares as required, e.g like a bootstrap
-   * TODO:
-   * Validate required global config params
-   * Construct gateway URL prefix : /api/v1/
-   * Set port
-   * set log_level, configure winston
-   * Set up jwt handling
-   * Check user role if provided and configure necessary permissions
-   * Configure rate limiting
-   * Configure logging
-   * Setup caching
-   *
-   */
-
-  try {
-    const gatewayConfigObject = gatewayConfigurationObject;
-
-    // API version is required
-    // console.log(gatewayConfigObject);
-    if (!gatewayConfigObject.api_version) {
-      throw new Error(`'api_version' is required in the gateway configuration file`);
-    }
-
-    const API_VERSION = gatewayConfigObject.api_version;
-
-    // Settings is required
-    if (!gatewayConfigObject.settings) {
-      throw new Error(`'settings' is required in the gateway configuration file`);
-    }
-
-    const globalSettings = gatewayConfigObject.settings;
-
-    // If settings, check if necessary fields are required
-
-    if (!globalSettings.base_path || !globalSettings.port) {
-      throw new Error('all configs params under settings are required');
-    }
-
-    // Construct API base path
-    const API_PATH = `${globalSettings.base_path}/${API_VERSION}`;
-    const API_GATEWAY_PORT = parseInt(globalSettings.port);
-
-    return {
-      API_PATH,
-      API_GATEWAY_PORT,
-    };
-  } catch (error: any) {
-    console.error(`Error resolving gateway global configuration: ${error.message}`);
-    throw error;
-  }
-}
