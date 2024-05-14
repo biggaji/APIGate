@@ -3,10 +3,10 @@ import httpProxy from 'http-proxy';
 import NodeCache from 'node-cache';
 import rateLimit from 'express-rate-limit';
 import compression from 'compression';
-import { logger } from './utils/logger';
-import { resolveEndpointFromRouteList } from './helpers/resolveEndpointsFromRouteList';
-import { bootstrapGateway } from './helpers/bootstrapGateway';
-import { resolveGlobalGatewayConfig } from './helpers/resolveGlobalGatewayConfig';
+import { logger } from './utils/logger.js';
+import { resolveEndpointFromRouteList } from './helpers/resolveEndpointsFromRouteList.js';
+import { bootstrapGateway } from './helpers/bootstrapGateway.js';
+import { resolveGlobalGatewayConfig } from './helpers/resolveGlobalGatewayConfig.js';
 
 const gatewayCache = new NodeCache({
   stdTTL: 240,
@@ -26,7 +26,7 @@ const proxy = httpProxy.createProxyServer({ ssl: false });
 
 bootstrapGateway(server, true);
 
-const gatewayGlobalConfig = resolveGlobalGatewayConfig();
+const gatewayGlobalConfig = await resolveGlobalGatewayConfig();
 
 server.use(express.urlencoded({ extended: true }));
 

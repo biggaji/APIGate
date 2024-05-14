@@ -1,9 +1,9 @@
 import path from 'node:path';
-import { PATH_CONSTANTS } from '../constants/pathConstants';
-import { GATEWAY_CONFIG_BIOLERPLATE } from '../constants/gatewayConfigurationBoilerplate';
+import { PATH_CONSTANTS } from '../constants/pathConstants.js';
+import { GATEWAY_CONFIG_BIOLERPLATE } from '../constants/gatewayConfigurationBoilerplate.js';
 import fs from 'node:fs';
 import yaml from 'js-yaml';
-import { logger } from '../utils/logger';
+import { logger } from '../utils/logger.js';
 
 async function loadGatewayConfigurationSchema() {
   let gatewayConfigurationObject: any;
