@@ -1,6 +1,13 @@
-import { gatewayConfigObject } from './loadGatewayConfig';
+import { CacheFactory } from '../adapters/index.js';
+import { Redis } from 'ioredis';
+import { gatewayConfigObject } from './loadGatewayConfig.js';
+import dotenv from 'dotenv';
+import Memcached from 'memcached';
 
-export function resolveGlobalGatewayConfig() {
+// Load env
+dotenv.config();
+
+export async function resolveGlobalGatewayConfig() {
   /**
    * To properly configure this gateway, i need to pass the server instance
    * and add and setup necessary middlewares as required, e.g like a bootstrap
@@ -38,6 +45,24 @@ export function resolveGlobalGatewayConfig() {
     if (!globalSettings.base_path || !globalSettings.port) {
       throw new Error('all configs params under settings are required');
     }
+
+    // Cache settings
+    const redisCache = CacheFactory.useClient(new Redis(process.env.REDIS_URL!));
+    await redisCache.set('hello', 'world');
+    const val = await redisCache.get('hello');
+
+    console.log('Found %s', val);
+
+    // const memCache = CacheFactory.useClient(
+    //   new Memcached('mc5.dev.ec2.memcachier.com:11211', {
+    //     retries: 10, // default: false
+    //     timeout: 1, // default: 0.5 (seconds)
+    //     remove: true,
+    //   }),
+    // );
+    // const value = await memCache.get('hello');
+
+    // console.log('MemCache%s', value);
 
     // Construct API base path
     const API_PATH = `${globalSettings.base_path}/${API_VERSION}`;

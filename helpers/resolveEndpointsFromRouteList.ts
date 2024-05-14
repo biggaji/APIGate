@@ -1,4 +1,4 @@
-import { gatewayConfigObject } from './loadGatewayConfig';
+import { gatewayConfigObject } from './loadGatewayConfig.js';
 
 /**
  *

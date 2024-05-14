@@ -1,6 +1,6 @@
 import winston from 'winston';
 import path from 'node:path';
-import { PATH_CONSTANTS } from '../constants/pathConstants';
+import { PATH_CONSTANTS } from '../constants/pathConstants.js';
 
 export const logger = winston.createLogger({
   level: 'debug',
