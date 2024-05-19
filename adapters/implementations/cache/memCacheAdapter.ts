@@ -1,6 +1,6 @@
 import Memcached from 'memcached';
-import { CacheAdapter } from './interfaces/cache.js';
-import { handleError } from '../utils/errorHandler.js';
+import { CacheAdapter } from '../../interfaces/cache.js';
+import { handleError } from '../../../utils/errorHandler.js';
 
 /**
  * A cache adapter implementation using Memcached.

@@ -47,22 +47,24 @@ export async function resolveGlobalGatewayConfig() {
     }
 
     // Cache settings
-    const redisCache = CacheFactory.useClient(new Redis(process.env.REDIS_URL!));
-    await redisCache.set('hello', 'world');
-    const val = await redisCache.get('hello');
+    // Check if cache is set in schema and configure the right factory client to use
+    if (gatewayConfigObject.cache) {
+      const cacheParams = gatewayConfigObject.cache;
+      switch (cacheParams.client) {
+        case 'redis':
+          break;
+          CacheFactory.useClient(new Redis());
+        case 'memcached':
+          CacheFactory.useClient(new Memcached(''));
+          break;
+      }
+    }
+    // const redisCache = CacheFactory.useClient(new Redis(process.env.REDIS_URL!));
 
-    console.log('Found %s', val);
+    // await redisCache.set('hello', 'world', true, 120);
+    // const val = await redisCache.get('hello');
 
-    // const memCache = CacheFactory.useClient(
-    //   new Memcached('mc5.dev.ec2.memcachier.com:11211', {
-    //     retries: 10, // default: false
-    //     timeout: 1, // default: 0.5 (seconds)
-    //     remove: true,
-    //   }),
-    // );
-    // const value = await memCache.get('hello');
-
-    // console.log('MemCache%s', value);
+    // console.log('Found %s', val);
 
     // Construct API base path
     const API_PATH = `${globalSettings.base_path}/${API_VERSION}`;

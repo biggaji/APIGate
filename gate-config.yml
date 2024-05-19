@@ -38,6 +38,7 @@ logging:
 
 # Caching configuration
 caching:
+  client: redis
   default_ttl: 1000
   max_size: 1000
 
