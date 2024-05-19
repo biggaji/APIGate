@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
-import { RedisCacheAdapter } from './redisCacheAdapter.js';
+import { RedisCacheAdapter } from '../implementations/cache/redisCacheAdapter.js';
 import Memcached from 'memcached';
-import { MemCacheAdapter } from './memCacheAdapter.js';
+import { MemCacheAdapter } from '../implementations/cache/memCacheAdapter.js';
 
 /**
  * Factory class for creating cache adapters.

@@ -1,3 +1,3 @@
-import { CacheFactory } from './cacheFactory.js';
+import { CacheFactory } from './factories/cacheFactory.js';
 
 export { CacheFactory };
